@@ -20,10 +20,12 @@ from .banco_pg import Banco
 TESTE = re.compile(r'(^rtqa|@fldubai\.com$|@example\.(com|invalid)$|^qa\.|^teste)', re.I)
 
 
-def migrar(sqlite_path: str, dsn: str, schema: str, esquema: str, sem_testes: bool = False) -> dict:
+def migrar(sqlite_path: str, dsn: str, schema: str, esquema: str, sem_testes: bool = False, migracao=None) -> dict:
     origem = sqlite3.connect(f'file:{sqlite_path}?mode=ro', uri=True)
     origem.row_factory = sqlite3.Row
     destino = Banco(dsn, schema, esquema)
+    if migracao:                                          # colunas/tabelas que o produto acrescenta depois do ESQUEMA
+        migracao(destino)
     tabelas = [r[0] for r in origem.execute("select name from sqlite_master where type='table' and name not like 'sqlite_%'")]
     ignorados = set()
     if sem_testes and 'usuarios' in tabelas:
@@ -66,8 +68,8 @@ def migrar(sqlite_path: str, dsn: str, schema: str, esquema: str, sem_testes: bo
 
 if __name__ == '__main__':
     arq, dsn, schema, modulo = sys.argv[1:5]
-    esquema = importlib.import_module(modulo).ESQUEMA
-    r = migrar(arq, dsn, schema, esquema, sem_testes='--sem-testes' in sys.argv)
+    mod = importlib.import_module(modulo)
+    r = migrar(arq, dsn, schema, mod.ESQUEMA, sem_testes='--sem-testes' in sys.argv, migracao=getattr(mod, '_migrar_esquema', None))
     ruins = {t: v for t, v in r.items() if v[0] not in ('ok',)}
     for t, (st, a, b) in r.items():
         print(f'{t:28s} {st:12s} sqlite={a} postgres={b}')
