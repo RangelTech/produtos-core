@@ -187,7 +187,7 @@ def registrar(app, db, *, enviar, login, usuario, criar_usuario, produto: str, b
         """Manda o e-mail; se o SMTP falhar, o link é apagado (não vale nem conta na cota de 3 por hora)."""
         antes = {r["hash"] for r in _links_recentes(email)}
         ok = _mandar_sem_desfazer(email, tipo)
-        if not ok:
+        if not ok and not dev:  # em dev (testes, sem SMTP) o link fica, para o link_dev funcionar
             for r in _links_recentes(email):
                 if r["hash"] not in antes:
                     db.exec("DELETE FROM acesso_links WHERE hash=?", (r["hash"],))

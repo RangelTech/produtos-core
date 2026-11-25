@@ -301,3 +301,12 @@ def test_ganchos_de_cadastro_e_pagina_de_entrar():
     c.post("/api/senha/esqueci", json={"email": "n@exemplo.com"})
     assert "https://t/entrar?redefinir=" in caixa[-1]
     assert c.get("/acesso/entrar?t=nada", follow_redirects=False).headers["location"] == "/entrar?entrar=1&link=invalido"
+
+
+def test_dev_sem_smtp_mantem_o_link():
+    db = BancoSQLite(); app = FastAPI()
+    acesso.registrar(app, db, enviar=lambda *a: False, login=lambda u: JSONResponse({"ok": True}), usuario=lambda r: None,
+                     criar_usuario=lambda e: None, produto="T", base_url="https://t", captcha=lambda t, i: True, dev=True)
+    db.exec("INSERT INTO usuarios(email,criado) VALUES(?,1)", ("d@exemplo.com",))
+    lk = TestClient(app).post("/api/entrar/link", json={"email": "d@exemplo.com"}).json()["link_dev"]
+    assert TestClient(app).get("/" + lk.split("/", 3)[3], follow_redirects=False).headers["location"] == "/app"
