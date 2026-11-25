@@ -1,0 +1,161 @@
+"""Arquivos dos produtos no MinIO (spec 57 §8.6), um bucket por produto. Portável: trocar de MinIO (ou ir para outro S3) é
+mudar S3_ENDPOINT / S3_PUBLICO / chaves no Infisical, sem mexer no produto.
+
+Configuração (ambiente):
+  S3_ENDPOINT   http://minio:9000 (rede interna do Docker)
+  S3_PUBLICO    https://storage.rangeltech.net (endereço que o navegador alcança; usado só para assinar links)
+  S3_BUCKET     bucket do produto
+  S3_ACCESS_KEY / S3_SECRET_KEY   chave do produto (política só do bucket dele)
+Sem S3_ENDPOINT, grava numa pasta local (desenvolvimento e testes): mesma interface.
+
+Chaves no padrão  <usuario_id>/uploads/...,  <usuario_id>/resultados/...,  _temp/...  (§8.6 item 1).
+"""
+from __future__ import annotations
+
+import io
+import mimetypes
+import os
+import shutil
+from datetime import timedelta
+from pathlib import Path
+from urllib.parse import urlparse
+
+
+def _limpa(chave: str) -> str:
+    chave = str(chave).replace('\\', '/').lstrip('/')
+    if not chave or '..' in chave.split('/'):
+        raise ValueError(f'chave inválida: {chave!r}')
+    return chave
+
+
+class Armazenamento:
+    """enviar, baixar, listar, apagar e link temporário. Use `Armazenamento()` (lê o ambiente)."""
+
+    def __init__(self, endpoint: str | None = None, bucket: str | None = None, chave: str | None = None,
+                 segredo: str | None = None, publico: str | None = None, pasta_local: str | None = None):
+        e = os.environ.get
+        self.endpoint = endpoint if endpoint is not None else e('S3_ENDPOINT', '')
+        self.bucket = bucket or e('S3_BUCKET', '')
+        self.publico = publico if publico is not None else e('S3_PUBLICO', '')
+        if self.endpoint:
+            from minio import Minio
+            u = urlparse(self.endpoint)
+            ak, sk = chave or e('S3_ACCESS_KEY', ''), segredo or e('S3_SECRET_KEY', '')
+            self._s3 = Minio(u.netloc, access_key=ak, secret_key=sk, secure=u.scheme == 'https', region='us-east-1')
+            if self.publico:
+                p = urlparse(self.publico)
+                self._assinador = Minio(p.netloc, access_key=ak, secret_key=sk, secure=p.scheme == 'https', region='us-east-1')
+            else:
+                self._assinador = self._s3
+            self.local = None
+        else:
+            self._s3 = None
+            self.local = Path(pasta_local or e('ARMAZENAMENTO_LOCAL', '') or './dados_local/arquivos') / (self.bucket or 'local')
+            self.local.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def remoto(self) -> bool:
+        return self._s3 is not None
+
+    # ------------------------------------------------------------------ gravar
+    def enviar(self, chave: str, dados, tipo: str | None = None) -> str:
+        """dados: bytes, str (texto), arquivo aberto (binário) ou Path (arquivo). Devolve a chave."""
+        chave = _limpa(chave)
+        if isinstance(dados, Path):
+            return self.enviar_arquivo(chave, dados, tipo)
+        if isinstance(dados, str):
+            dados = dados.encode()
+        if isinstance(dados, (bytes, bytearray)):
+            dados = io.BytesIO(dados)
+        tipo = tipo or mimetypes.guess_type(chave)[0] or 'application/octet-stream'
+        if self.remoto:
+            self._s3.put_object(self.bucket, chave, dados, length=-1, part_size=16 * 1024 * 1024, content_type=tipo)
+        else:
+            destino = self.local / chave
+            destino.parent.mkdir(parents=True, exist_ok=True)
+            with open(destino, 'wb') as f:
+                shutil.copyfileobj(dados, f)
+        return chave
+
+    def enviar_arquivo(self, chave: str, caminho, tipo: str | None = None) -> str:
+        chave = _limpa(chave)
+        tipo = tipo or mimetypes.guess_type(str(caminho))[0] or 'application/octet-stream'
+        if self.remoto:
+            self._s3.fput_object(self.bucket, chave, str(caminho), content_type=tipo)
+        else:
+            destino = self.local / chave
+            destino.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(caminho, destino)
+        return chave
+
+    # ------------------------------------------------------------------ ler
+    def baixar(self, chave: str) -> bytes:
+        chave = _limpa(chave)
+        if self.remoto:
+            r = self._s3.get_object(self.bucket, chave)
+            try:
+                return r.read()
+            finally:
+                r.close(); r.release_conn()
+        return (self.local / chave).read_bytes()
+
+    def baixar_para(self, chave: str, caminho) -> Path:
+        chave = _limpa(chave)
+        Path(caminho).parent.mkdir(parents=True, exist_ok=True)
+        if self.remoto:
+            self._s3.fget_object(self.bucket, chave, str(caminho))
+        else:
+            shutil.copyfile(self.local / chave, caminho)
+        return Path(caminho)
+
+    def existe(self, chave: str) -> bool:
+        chave = _limpa(chave)
+        if self.remoto:
+            from minio.error import S3Error
+            try:
+                self._s3.stat_object(self.bucket, chave)
+                return True
+            except S3Error as e:
+                if e.code in ('NoSuchKey', 'NoSuchObject', 'NotFound'):
+                    return False
+                raise
+        return (self.local / chave).is_file()
+
+    def tamanho(self, chave: str) -> int:
+        chave = _limpa(chave)
+        if self.remoto:
+            return self._s3.stat_object(self.bucket, chave).size
+        return (self.local / chave).stat().st_size
+
+    def listar(self, prefixo: str = '') -> list[str]:
+        prefixo = prefixo.replace('\\', '/').lstrip('/')
+        if self.remoto:
+            return sorted(o.object_name for o in self._s3.list_objects(self.bucket, prefix=prefixo, recursive=True))
+        base = self.local
+        return sorted(str(p.relative_to(base)).replace('\\', '/') for p in base.rglob('*')
+                      if p.is_file() and str(p.relative_to(base)).replace('\\', '/').startswith(prefixo))
+
+    # ------------------------------------------------------------------ apagar
+    def apagar(self, chave: str) -> None:
+        chave = _limpa(chave)
+        if self.remoto:
+            self._s3.remove_object(self.bucket, chave)
+        else:
+            (self.local / chave).unlink(missing_ok=True)
+
+    def apagar_prefixo(self, prefixo: str) -> int:
+        """Apaga tudo sob o prefixo (ex.: '<usuario_id>/' ao apagar a conta, §10A.4). Devolve quantos apagou."""
+        prefixo = _limpa(prefixo.rstrip('/')) + '/'
+        chaves = self.listar(prefixo)
+        for c in chaves:
+            self.apagar(c)
+        return len(chaves)
+
+    # ------------------------------------------------------------------ link
+    def link(self, chave: str, segundos: int = 3600, nome: str | None = None) -> str | None:
+        """Link temporário para o navegador baixar direto do MinIO (sem passar pelo app). Local: None (o app serve)."""
+        chave = _limpa(chave)
+        if not self.remoto:
+            return None
+        extra = {'response-content-disposition': f'attachment; filename="{nome}"'} if nome else None
+        return self._assinador.presigned_get_object(self.bucket, chave, expires=timedelta(seconds=segundos), response_headers=extra)
