@@ -180,6 +180,20 @@ def registrar(app, db, *, enviar, login, usuario, criar_usuario, produto: str, b
                 f'<p style="color:#8b8b98;font-size:13px">Se o botão não abrir, copie este endereço: {href}</p>')
 
     def _mandar(email: str, tipo: str) -> bool:
+        """Manda o e-mail; se o SMTP falhar, o link é apagado (não vale nem conta na cota de 3 por hora)."""
+        antes = {r["hash"] for r in _links_recentes(email)}
+        ok = _mandar_sem_desfazer(email, tipo)
+        if not ok:
+            for r in _links_recentes(email):
+                if r["hash"] not in antes:
+                    db.exec("DELETE FROM acesso_links WHERE hash=?", (r["hash"],))
+        return ok
+
+    def _links_recentes(email: str) -> list:
+        lst = db.todos("SELECT hash FROM acesso_links WHERE email=? AND criado>?", (email, agora() - 3600)) if hasattr(db, "todos") else             [dict(r) for r in db.con.execute("SELECT hash FROM acesso_links WHERE email=? AND criado>?", (email, agora() - 3600)).fetchall()]
+        return [dict(r) for r in lst]
+
+    def _mandar_sem_desfazer(email: str, tipo: str) -> bool:
         if tipo == "entrar":
             t = _novo_link(email, "entrar", LINK_VALIDO_S)
             if not t:

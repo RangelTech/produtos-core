@@ -261,3 +261,17 @@ def test_modo_dev_e_ajudante_de_teste():
     sem_dev, _, _ = montar(BancoSQLite, captcha_valido="")
     TestClient(sem_dev).post("/api/cadastro", json={"email": "x@exemplo.com", "senha": "senha-boa-1"})
     assert "link_dev" not in TestClient(sem_dev).post("/api/entrar/link", json={"email": "x@exemplo.com"}).json()
+
+
+def test_email_que_nao_saiu_nao_conta_na_cota():
+    db = BancoSQLite(); app = FastAPI(); saiu = {"ok": False}
+    acesso.registrar(app, db, enviar=lambda *a: saiu["ok"], login=lambda u: JSONResponse({"ok": True}), usuario=lambda r: None,
+                     criar_usuario=lambda e: None, produto="T", base_url="https://t", captcha=lambda t, i: True)
+    db.exec("INSERT INTO usuarios(email,criado) VALUES(?,1)", ("q@exemplo.com",))
+    c = TestClient(app)
+    for _ in range(5):  # SMTP fora: nenhum link fica valendo e a cota não gasta
+        assert c.post("/api/entrar/link", json={"email": "q@exemplo.com"}).status_code == 200
+    assert db.um("SELECT COUNT(*) AS n FROM acesso_links")["n"] == 0
+    saiu["ok"] = True
+    assert c.post("/api/entrar/link", json={"email": "q@exemplo.com"}).status_code == 200
+    assert db.um("SELECT COUNT(*) AS n FROM acesso_links")["n"] == 1
