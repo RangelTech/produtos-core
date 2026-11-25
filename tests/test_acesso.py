@@ -49,7 +49,7 @@ def _bancos():
         yield "postgres", lambda: Banco(dsn, "teste_acesso_" + secrets.token_hex(4), ESQUEMA)
 
 
-def montar(banco, captcha_valido="bom"):
+def montar(banco, captcha_valido="bom", dev=False):
     db = banco()
     app = FastAPI()
     caixa = []
@@ -83,7 +83,7 @@ def montar(banco, captcha_valido="bom"):
     acesso.registrar(app, db, enviar=enviar, login=login, usuario=usuario, criar_usuario=criar_usuario,
                      produto="Teste AI", base_url="https://teste.exemplo", destino="/app",
                      demo_email="demo@exemplo.com", demo_senha="demo-senha-123",
-                     captcha=lambda token, ip: token == captcha_valido)
+                     captcha=lambda token, ip: token == captcha_valido, dev=dev)
     return app, db, caixa
 
 
@@ -230,3 +230,21 @@ def test_captcha_real_desligado_sem_chave_e_bloqueia_token_ruim_com_chave():
     # chave de teste oficial da Cloudflare que sempre falha
     assert acesso.captcha_ok("qualquer", segredo="2x0000000000000000000000000000000AA") is False
     assert acesso.captcha_ok("XXXX.DUMMY.TOKEN.XXXX", segredo="1x0000000000000000000000000000000AA") is True
+
+
+def test_modo_dev_e_ajudante_de_teste():
+    from produtos_core import teste
+    app, db, _ = montar(BancoSQLite, captcha_valido="", dev=True)  # captcha "" = desligado, como nos testes dos produtos
+    c = TestClient(app)
+    assert teste.entrar(c, "nova@exemplo.com").status_code == 200          # cria a conta
+    assert TestClient(app).post("/api/entrar/link", json={"email": "nova@exemplo.com"}).json()["link_dev"].startswith("https://teste.exemplo/acesso/entrar?t=")
+    assert "link_dev" not in TestClient(app).post("/api/entrar/link", json={"email": "ninguem@exemplo.com"}).json()
+    assert teste.entrar(TestClient(app), "nova@exemplo.com").status_code == 200  # entra pela senha
+    db.exec("INSERT INTO usuarios(email,criado) VALUES(?,?)", ("webhook@exemplo.com", 1))
+    w = TestClient(app)
+    teste.entrar(w, "webhook@exemplo.com")                                   # conta sem senha entra pelo link
+    assert w.get("/api/conta").json()["email"] == "webhook@exemplo.com"
+    assert TestClient(app).post("/api/senha/esqueci", json={"email": "nova@exemplo.com"}).json()["token_dev"]
+    sem_dev, _, _ = montar(BancoSQLite, captcha_valido="")
+    TestClient(sem_dev).post("/api/cadastro", json={"email": "x@exemplo.com", "senha": "senha-boa-1"})
+    assert "link_dev" not in TestClient(sem_dev).post("/api/entrar/link", json={"email": "x@exemplo.com"}).json()

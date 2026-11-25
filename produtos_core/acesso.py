@@ -105,7 +105,7 @@ def _h(valor: str) -> str:
 
 def registrar(app, db, *, enviar, login, usuario, criar_usuario, produto: str, base_url: str,
               destino: str = "/app", cor: str = "#7c5cff", demo_email: str = "", demo_senha: str = "",
-              captcha=None) -> None:
+              captcha=None, dev: bool = False) -> None:
     """Liga as rotas de cadastro e login no app FastAPI do produto.
 
     enviar(para, assunto, texto, html) -> bool   e-mail pelo SMTP do produto (o produto põe a moldura dele)
@@ -113,6 +113,7 @@ def registrar(app, db, *, enviar, login, usuario, criar_usuario, produto: str, b
     usuario(request) -> usuário logado (401 se não houver)
     criar_usuario(email) -> dict                 cria (ou devolve) o usuário no esquema do produto
     captcha(token, ip) -> bool                   opcional (testes); padrão: Turnstile
+    dev=True                                     devolve o link na resposta (`link_dev`), só para testes locais
     """
     verificar = captcha or captcha_ok
     for sql in ESQUEMA:
@@ -166,6 +167,8 @@ def registrar(app, db, *, enviar, login, usuario, criar_usuario, produto: str, b
         db.exec("UPDATE acesso_links SET usado=? WHERE hash=? AND usado IS NULL", (agora(), _h(token)))
         return r["email"]
 
+    ultimo: dict = {}
+
     def _botao(href: str, rotulo: str) -> str:
         return (f'<p><a href="{href}" style="display:inline-block;background:{cor};color:#fff;text-decoration:none;'
                 f'font-weight:700;padding:14px 22px;border-radius:12px">{rotulo}</a></p>'
@@ -177,6 +180,7 @@ def registrar(app, db, *, enviar, login, usuario, criar_usuario, produto: str, b
             if not t:
                 return False
             url = f"{base}/acesso/entrar?t={t}"
+            ultimo["url"] = url
             return enviar(email, f"Seu link para entrar no {produto}",
                           f"Clique para entrar no {produto}: {url}\nVale por 15 minutos e só funciona uma vez.",
                           f'<p style="font-size:16px">Clique no botão para entrar no {produto}.</p>{_botao(url, "Entrar agora")}'
@@ -186,6 +190,7 @@ def registrar(app, db, *, enviar, login, usuario, criar_usuario, produto: str, b
             if not t:
                 return False
             url = f"{base}/?redefinir={t}"
+            ultimo["url"], ultimo["token"] = url, t
             return enviar(email, f"Crie uma senha nova no {produto}",
                           f"Para criar uma senha nova no {produto}: {url}\nVale por 15 minutos.",
                           f'<p style="font-size:16px">Recebemos um pedido para trocar a senha do {produto}.</p>'
@@ -284,9 +289,10 @@ def registrar(app, db, *, enviar, login, usuario, criar_usuario, produto: str, b
         _exigir_captcha(b, request)
         if db.um("SELECT id FROM usuarios WHERE email=?", (email,)) and _emails_na_hora(email) >= MAX_EMAILS_HORA:
             raise HTTPException(429, "já mandamos 3 e-mails para esse endereço nesta hora; tente de novo mais tarde")
+        ultimo.clear()
         if db.um("SELECT id FROM usuarios WHERE email=?", (email,)):
             _mandar(email, "entrar")
-        return {"ok": True, "mensagem": MSG_LINK}
+        return {"ok": True, "mensagem": MSG_LINK, **({"link_dev": ultimo["url"]} if dev and ultimo.get("url") else {})}
 
     @app.get("/acesso/entrar")
     def abrir_link(t: str = ""):
@@ -317,9 +323,10 @@ def registrar(app, db, *, enviar, login, usuario, criar_usuario, produto: str, b
         _exigir_captcha(b, request)
         if db.um("SELECT id FROM usuarios WHERE email=?", (email,)) and _emails_na_hora(email) >= MAX_EMAILS_HORA:
             raise HTTPException(429, "já mandamos 3 e-mails para esse endereço nesta hora; tente de novo mais tarde")
+        ultimo.clear()
         if db.um("SELECT id FROM usuarios WHERE email=?", (email,)):
             _mandar(email, "redefinir")
-        return {"ok": True, "mensagem": MSG_LINK}
+        return {"ok": True, "mensagem": MSG_LINK, **({"token_dev": ultimo["token"]} if dev and ultimo.get("token") else {})}
 
     @app.post("/api/senha/redefinir")
     async def redefinir(request: Request):
