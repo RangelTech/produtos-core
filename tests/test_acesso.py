@@ -145,6 +145,19 @@ def test_login_senha_e_trava_depois_de_5_erros(ambiente):
     assert r.status_code == 429
 
 
+def test_demo_lido_na_hora():
+    cfg = {"e": "demo@exemplo.com", "s": "primeira-1"}
+    db = BancoSQLite(); app = FastAPI()
+    acesso.registrar(app, db, enviar=lambda *a: True, login=lambda u: JSONResponse({"ok": True}), usuario=lambda r: None,
+                     criar_usuario=lambda e: (db.exec("INSERT OR IGNORE INTO usuarios(email,criado) VALUES(?,1)", (e,)), db.um("SELECT * FROM usuarios WHERE email=?", (e,)))[1],
+                     produto="T", base_url="https://t", demo_email=lambda: cfg["e"], demo_senha=lambda: cfg["s"], captcha=lambda t, i: True)
+    c = TestClient(app)
+    assert c.post("/api/entrar/senha", json={"email": "demo@exemplo.com", "senha": "primeira-1"}).status_code == 200
+    cfg["s"] = "segunda-2"
+    assert c.post("/api/entrar/senha", json={"email": "demo@exemplo.com", "senha": "primeira-1"}).status_code == 400
+    assert c.post("/api/entrar/senha", json={"email": "Demo@Exemplo.com", "senha": "segunda-2"}).status_code == 200
+
+
 def test_demo_entra_pela_senha_da_configuracao(ambiente):
     app, _, _ = ambiente
     c = TestClient(app)

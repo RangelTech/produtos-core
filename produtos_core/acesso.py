@@ -128,7 +128,12 @@ def registrar(app, db, *, enviar, login, usuario, criar_usuario, produto: str, b
     except Exception:  # noqa: BLE001
         pass
     base = base_url.rstrip("/")
-    demo_email = (demo_email or "").lower()
+
+    def _demo() -> tuple[str, str]:
+        """demo_email/demo_senha podem ser valor ou função (lidos na hora: o admin e os testes mudam a configuração)."""
+        e = demo_email() if callable(demo_email) else demo_email
+        s_ = demo_senha() if callable(demo_senha) else demo_senha
+        return (e or "").lower(), s_ or ""
 
     # ------------------------------------------------------------------ apoio
     def _evento(chave: str) -> None:
@@ -269,7 +274,8 @@ def registrar(app, db, *, enviar, login, usuario, criar_usuario, produto: str, b
         _exigir_captcha(b, request)
         if _travado(email):
             raise HTTPException(429, "muitas tentativas; espere 15 minutos ou use 'Entrar por link no e-mail'")
-        if demo_email and demo_senha and email == demo_email and hmac.compare_digest(senha, demo_senha):
+        de, ds = _demo()
+        if de and ds and email == de and hmac.compare_digest(senha, ds):
             return login(criar_usuario(email))
         u = db.um("SELECT * FROM usuarios WHERE email=?", (email,))
         if not u or not conferir_senha(u.get("senha_hash"), senha):
@@ -344,7 +350,8 @@ def registrar(app, db, *, enviar, login, usuario, criar_usuario, produto: str, b
     @app.get("/api/senha")
     def tem_senha(request: Request):
         u = usuario(request)
-        return {"tem_senha": bool(u.get("senha_hash")) or bool(demo_email and u["email"] == demo_email), "email": u["email"]}
+        de = _demo()[0]
+        return {"tem_senha": bool(u.get("senha_hash")) or bool(de and u["email"] == de), "email": u["email"]}
 
     @app.post("/api/senha")
     async def definir_senha(request: Request):
