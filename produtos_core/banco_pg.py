@@ -312,10 +312,23 @@ class Banco:
             c.execute(f'SET search_path TO "{schema}"')
         self._colunas: dict[str, list[str]] = {}
         self._em_tx = False
+        self._funcoes_sqlite()
         self._pk: dict[str, list[str]] = {}
         self.con = _Execucao(self)
         if esquema:
             self.con.executescript(esquema)
+
+    def _funcoes_sqlite(self):
+        """Funções do SQLite que os produtos usam e o Postgres não tem (criadas no schema do produto)."""
+        corpo = ("select jsonb_set(coalesce(nullif(t, ''), '{}')::jsonb, string_to_array(substr(caminho, 3), '.'), "
+                 "to_jsonb(v), true)::text")
+        with self._pg.cursor() as c:
+            for tipo in ('text', 'bigint', 'double precision', 'boolean'):
+                try:
+                    c.execute(f'create or replace function "{self.schema}".json_set(t text, caminho text, v {tipo}) '
+                              f'returns text language sql immutable as $f$ {corpo} $f$')
+                except psycopg.Error:
+                    pass                                   # sem permissao de criar: segue (o produto talvez nem use)
 
     # ---- introspecção (cache)
     def _cols(self, tabela: str) -> list[str]:
