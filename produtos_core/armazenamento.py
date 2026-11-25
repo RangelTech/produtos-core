@@ -200,7 +200,8 @@ class Espelho:
         self.prefixo = ''
         if os.environ.get('S3_PREFIXO_TESTE'):
             import hashlib
-            self.prefixo = '_teste/' + hashlib.sha1(str(self.raiz).encode()).hexdigest()[:12] + '/'
+            # o valor da variável entra no hash: cada rodada de testes passa um id próprio (o tmp_path do pytest se repete entre contêineres)
+            self.prefixo = '_teste/' + hashlib.sha1((str(self.raiz) + os.environ['S3_PREFIXO_TESTE']).encode()).hexdigest()[:12] + '/'
 
 
     @property
