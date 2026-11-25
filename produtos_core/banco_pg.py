@@ -138,6 +138,50 @@ def _having_com_apelido(sql: str) -> str:
     return f'SELECT * FROM ({sql[:m.start()].rstrip()}) AS _q WHERE {cond.strip()} {cauda}'.rstrip()
 
 
+def _virgulas_topo(txt: str) -> list[str]:
+    out, prof, buf, aspas = [], 0, [], False
+    for ch in txt:
+        if ch == "'":
+            aspas = not aspas
+        if not aspas:
+            if ch == '(':
+                prof += 1
+            elif ch == ')':
+                prof -= 1
+            elif ch == ',' and prof == 0:
+                out.append(''.join(buf)); buf = []
+                continue
+        buf.append(ch)
+    out.append(''.join(buf))
+    return out
+
+
+def _qualificar_upsert(sql: str, tabela: str, colunas: list[str]) -> str:
+    """No `ON CONFLICT ... DO UPDATE SET a = CASE ... ELSE a END` o SQLite entende `a` como a linha que já existe; no
+    Postgres isso é ambíguo. Qualifica com o nome da tabela os nomes de coluna do lado direito das atribuições."""
+    m = re.search(r'\bDO\s+UPDATE\s+SET\b', sql, re.I)
+    if not m:
+        return sql
+    resto = sql[m.end():]
+    fim = re.search(r'\b(WHERE|RETURNING)\b', resto, re.I)
+    sets = resto[:fim.start()] if fim else resto
+    cauda = resto[fim.start():] if fim else ''
+    cols = set(colunas)
+    novos = []
+    for atr in _virgulas_topo(sets):
+        if '=' not in atr:
+            novos.append(atr); continue
+        esq, dir_ = atr.split('=', 1)
+        pedacos = []
+        for tipo, p in _partes(dir_):
+            if tipo == 'sql':
+                p = re.sub(r'(?<![\w."])\b([A-Za-z_]\w*)\b(?!\s*\()',
+                           lambda mm: f'"{tabela}".{mm.group(1)}' if mm.group(1) in cols else mm.group(1), p)
+            pedacos.append(p)
+        novos.append(esq + '=' + ''.join(pedacos))
+    return sql[:m.end()] + ','.join(novos) + cauda
+
+
 def traduzir(sql: str, com_params: bool = True) -> tuple[str, dict]:
     """Traduz um comando DML/consulta. Devolve (sql_postgres, dicas) — dicas: {'ignorar': bool, 'substituir': tabela}.
     Primeiro as funcoes (datas, MIN/MAX escalar), depois placeholders e `%` (fora e dentro de literais)."""
@@ -322,6 +366,9 @@ class Banco:
                     s2 = s2 + (f" ON CONFLICT ({', '.join(pk)}) DO UPDATE SET {upd}" if pk and upd else ' ON CONFLICT DO NOTHING')
                 elif dicas.get('ignorar'):
                     s2 = s2 + ' ON CONFLICT DO NOTHING'
+            if alto.startswith('INSERT') and re.search(r'DO\s+UPDATE\s+SET', s2, re.I):
+                tab_u = re.search(r'INSERT\s+INTO\s+"?(\w+)"?', s2, re.I).group(1)
+                s2 = _qualificar_upsert(s2, tab_u, self._cols(tab_u))
             retorna_id = False
             if alto.startswith('INSERT') and 'RETURNING' not in s2.upper():
                 tabela = re.search(r'INSERT\s+INTO\s+"?(\w+)"?', s2, re.I).group(1)

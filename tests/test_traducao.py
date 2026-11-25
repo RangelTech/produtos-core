@@ -37,3 +37,10 @@ def test_having_com_apelido():
     s, _ = traduzir("SELECT conta, SUM(valor) s FROM l WHERE conta LIKE 'u:%' GROUP BY conta HAVING s < 0")
     assert s == "SELECT * FROM (SELECT conta, SUM(valor) s FROM l WHERE conta ILIKE 'u:%%' GROUP BY conta) AS _q WHERE s < 0"
     assert traduzir("SELECT a, COUNT(*) FROM t GROUP BY a HAVING COUNT(*) > 1")[0] == "SELECT a, COUNT(*) FROM t GROUP BY a HAVING COUNT(*) > 1"
+
+
+def test_upsert_qualifica_coluna_da_linha_existente():
+    from produtos_core.banco_pg import _qualificar_upsert
+    s = _qualificar_upsert("INSERT INTO conversas(conta,contato) VALUES(%s,%s) ON CONFLICT(conta) DO UPDATE SET ultima=excluded.ultima, contato=CASE WHEN excluded.contato!='' THEN excluded.contato ELSE contato END",
+                           'conversas', ['conta', 'contato', 'ultima'])
+    assert s.endswith("ultima=excluded.ultima, contato=CASE WHEN excluded.contato!='' THEN excluded.contato ELSE \"conversas\".contato END")
