@@ -196,6 +196,12 @@ class Espelho:
     def __init__(self, arm: Armazenamento, raiz):
         self.arm = arm
         self.raiz = Path(raiz).resolve()
+        # nos testes (S3_PREFIXO_TESTE=1) cada raiz ganha um prefixo próprio no bucket compartilhado de testes
+        self.prefixo = ''
+        if os.environ.get('S3_PREFIXO_TESTE'):
+            import hashlib
+            self.prefixo = '_teste/' + hashlib.sha1(str(self.raiz).encode()).hexdigest()[:12] + '/'
+
 
     @property
     def ativo(self) -> bool:
@@ -204,7 +210,7 @@ class Espelho:
     def chave(self, caminho) -> str:
         p = Path(caminho)
         p = p.resolve() if p.is_absolute() or p.exists() else (self.raiz / p).resolve()
-        return _limpa(str(p.relative_to(self.raiz)))
+        return _limpa(self.prefixo + p.relative_to(self.raiz).as_posix())
 
     def guardar(self, caminho) -> str | None:
         if not self.ativo:
@@ -234,7 +240,7 @@ class Espelho:
         pasta = Path(pasta)
         if self.ativo:
             for k in self.arm.listar(self.chave(pasta) + '/'):
-                destino = self.raiz / k
+                destino = self.raiz / k[len(self.prefixo):]
                 if not destino.is_file():
                     self.arm.baixar_para(k, destino)
         return pasta
