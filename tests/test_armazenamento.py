@@ -66,3 +66,13 @@ def test_link_publico_baixa_pela_internet():
             assert r.read() == 'pelo link'.encode()
     finally:
         a.apagar(k)
+
+
+def test_rota_de_saude(tmp_path):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from produtos_core import armazenamento
+    app = FastAPI()
+    armazenamento.registrar(app, Armazenamento(endpoint='', bucket='t', pasta_local=str(tmp_path)))
+    j = TestClient(app).get('/health/arquivos').json()
+    assert j == {'ok': True, 'modo': 'local', 'bucket': 't'} and app.state.arquivos.listar('_saude/') == []

@@ -159,3 +159,25 @@ class Armazenamento:
             return None
         extra = {'response-content-disposition': f'attachment; filename="{nome}"'} if nome else None
         return self._assinador.presigned_get_object(self.bucket, chave, expires=timedelta(seconds=segundos), response_headers=extra)
+
+
+def registrar(app, arm: 'Armazenamento | None' = None) -> 'Armazenamento':
+    """Liga o armazenamento no app (app.state.arquivos) e a rota /health/arquivos (grava, lê e apaga um objeto no
+    bucket do produto; serve ao Uptime Kuma e ao QA). Devolve o Armazenamento."""
+    import secrets as _s
+    import time as _t
+    from fastapi.responses import JSONResponse
+    arm = arm or Armazenamento()
+    app.state.arquivos = arm
+
+    @app.get('/health/arquivos')
+    def saude_arquivos():
+        k = f'_saude/{int(_t.time())}-{_s.token_hex(3)}.txt'
+        try:
+            arm.enviar(k, 'ok')
+            ok = arm.baixar(k) == b'ok'
+            arm.apagar(k)
+            return {'ok': ok, 'modo': 'minio' if arm.remoto else 'local', 'bucket': arm.bucket}
+        except Exception as e:  # noqa: BLE001
+            return JSONResponse({'ok': False, 'modo': 'minio' if arm.remoto else 'local', 'erro': type(e).__name__}, status_code=503)
+    return arm
