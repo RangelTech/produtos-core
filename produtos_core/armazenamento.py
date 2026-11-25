@@ -181,3 +181,72 @@ def registrar(app, arm: 'Armazenamento | None' = None) -> 'Armazenamento':
         except Exception as e:  # noqa: BLE001
             return JSONResponse({'ok': False, 'modo': 'minio' if arm.remoto else 'local', 'erro': type(e).__name__}, status_code=503)
     return arm
+
+
+class Espelho:
+    """Arquivos do produto com o MinIO como fonte oficial e o disco só como cache (spec 57 §8.6).
+
+    O código do produto continua trabalhando com caminhos em `raiz` (ffmpeg, Pillow, FileResponse), e chama:
+      guardar(caminho)     depois de gravar: sobe para o bucket com a chave = caminho relativo à raiz
+      garantir(caminho)    antes de ler/servir: se o arquivo não está no disco (contêiner novo), baixa do bucket
+      apagar(caminho) / apagar_pasta(pasta)   apaga no disco e no bucket
+    Sem MinIO (desenvolvimento e testes) tudo vira no-op e o disco é a única cópia, como antes.
+    """
+
+    def __init__(self, arm: Armazenamento, raiz):
+        self.arm = arm
+        self.raiz = Path(raiz).resolve()
+
+    @property
+    def ativo(self) -> bool:
+        return self.arm.remoto
+
+    def chave(self, caminho) -> str:
+        p = Path(caminho)
+        p = p.resolve() if p.is_absolute() or p.exists() else (self.raiz / p).resolve()
+        return _limpa(str(p.relative_to(self.raiz)))
+
+    def guardar(self, caminho) -> str | None:
+        if not self.ativo:
+            return None
+        return self.arm.enviar_arquivo(self.chave(caminho), caminho)
+
+    def guardar_pasta(self, pasta) -> int:
+        if not self.ativo:
+            return 0
+        n = 0
+        for f in Path(pasta).rglob('*'):
+            if f.is_file():
+                self.guardar(f); n += 1
+        return n
+
+    def garantir(self, caminho) -> Path:
+        p = Path(caminho)
+        if p.is_file() or not self.ativo:
+            return p
+        k = self.chave(p)
+        if self.arm.existe(k):
+            self.arm.baixar_para(k, p)
+        return p
+
+    def garantir_pasta(self, pasta) -> Path:
+        """Baixa a pasta inteira (ex.: plano com várias imagens) se faltar algo no disco."""
+        pasta = Path(pasta)
+        if self.ativo:
+            for k in self.arm.listar(self.chave(pasta) + '/'):
+                destino = self.raiz / k
+                if not destino.is_file():
+                    self.arm.baixar_para(k, destino)
+        return pasta
+
+    def apagar(self, caminho) -> None:
+        p = Path(caminho)
+        if self.ativo:
+            self.arm.apagar(self.chave(p))
+        p.unlink(missing_ok=True)
+
+    def apagar_pasta(self, pasta) -> None:
+        pasta = Path(pasta)
+        if self.ativo:
+            self.arm.apagar_prefixo(self.chave(pasta))
+        shutil.rmtree(pasta, ignore_errors=True)
