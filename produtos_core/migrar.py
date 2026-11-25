@@ -50,7 +50,10 @@ def migrar(sqlite_path: str, dsn: str, schema: str, esquema: str, sem_testes: bo
                 lista = ', '.join(f'"{x}"' for x in cols)
                 c.executemany(f'insert into "{t}" ({lista}) overriding system value values ({ph})', [tuple(l) for l in linhas])
             if 'id' in cols:
-                c.execute(f"select setval(pg_get_serial_sequence('\"{schema}\".\"{t}\"', 'id'), greatest(coalesce((select max(id) from \"{t}\"), 0), 1))")
+                c.execute("select pg_get_serial_sequence(%s, 'id') as seq", (f'"{schema}"."{t}"',))
+                seq = c.fetchone()['seq']
+                if seq:                                       # so colunas id de identidade (numericas) tem sequencia
+                    c.execute(f'select setval(%s, greatest(coalesce((select max(id) from "{t}"), 0), 1))', (seq,))
             c.execute(f'select count(*) as n from "{t}"')
             n_pg = c.fetchone()['n']
         rel[t] = ('ok' if n_pg == len(linhas) else 'DIFERENTE', len(linhas), n_pg)
