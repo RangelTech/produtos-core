@@ -31,9 +31,12 @@ def migrar(sqlite_path: str, dsn: str, schema: str, esquema: str, sem_testes: bo
     rel = {}
     for t in tabelas:
         cols_pg = destino._cols(t)
-        if not cols_pg:
-            rel[t] = ('sem tabela no Postgres', 0, 0)
-            continue
+        if not cols_pg:                                   # tabela criada em tempo de execucao pelo produto: usa o DDL do proprio SQLite
+            ddl = origem.execute("select sql from sqlite_master where type='table' and name=?", (t,)).fetchone()[0]
+            destino.con.execute(ddl.replace('CREATE TABLE ', 'CREATE TABLE IF NOT EXISTS ', 1) if 'IF NOT EXISTS' not in ddl.upper() else ddl)
+            for (idx,) in origem.execute("select sql from sqlite_master where type='index' and tbl_name=? and sql is not null", (t,)):
+                destino.con.execute(idx.replace('CREATE INDEX ', 'CREATE INDEX IF NOT EXISTS ', 1).replace('CREATE UNIQUE INDEX ', 'CREATE UNIQUE INDEX IF NOT EXISTS ', 1))
+            cols_pg = destino._cols(t)
         cols = [c[1] for c in origem.execute(f'pragma table_info("{t}")') if c[1] in cols_pg]
         linhas = origem.execute(f'select {", ".join(chr(34) + c + chr(34) for c in cols)} from "{t}"').fetchall()
         col_usuario = 'usuario' if 'usuario' in cols else ('usuario_id' if 'usuario_id' in cols else None)
