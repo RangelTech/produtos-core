@@ -112,3 +112,17 @@ def _tem(db, tabela):
         return True
     except Exception:  # noqa: BLE001
         return False
+
+
+def test_planos_do_ambiente():
+    env = {"X_CHECKOUTS": '{"pro": "https://pay.cakto.com.br/abc", "whats:start": "https://pay.cakto.com.br/w1"}',
+           "X_PLANOS_CAKTO": '{"uuid-1": "pro", "uuid-2": "whats:start", "uuid-3": "pro"}', "OUTRA": "x"}
+    p = {x["plano"]: x for x in admin_usuarios.planos_do_ambiente(env)}
+    assert p["pro"] == {"plano": "pro", "checkout": "https://pay.cakto.com.br/abc", "oferta": "abc", "produtos_cakto": ["uuid-1", "uuid-3"]}
+    assert p["whats:start"]["oferta"] == "w1"
+
+
+def test_rota_planos_exige_login(cli):
+    c, _, _ = cli
+    assert c.get("/api/painel/planos", headers={"x-ok": "0"}).status_code == 401
+    assert "planos" in c.get("/api/painel/planos").json()

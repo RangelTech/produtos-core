@@ -148,3 +148,33 @@ def registrar(r, db, checar) -> None:
                 removidas[tabela] = n
         db.exec("DELETE FROM usuarios WHERE id=?", (uid,))
         return {"ok": True, "email": u["email"], "linhas_removidas": removidas, "arquivos_removidos": arquivos}
+
+    @r.get("/planos")
+    def planos_cakto(request: Request):
+        """Planos à venda (spec 57 §5.1): plano -> link do checkout, oferta e produto da Cakto, lidos do ambiente do produto
+        (*_CHECKOUTS e *_PLANOS_CAKTO, gravados no Infisical). Só leitura: preço e oferta mudam na Cakto e no Infisical."""
+        checar(request)
+        return {"planos": planos_do_ambiente()}
+
+
+def planos_do_ambiente(env=None) -> list[dict]:
+    import json
+    env = os.environ if env is None else env
+    links, mapa = {}, {}
+    for k, v in env.items():
+        try:
+            if k.endswith("_CHECKOUTS") and not k.endswith("_FAEL_CHECKOUTS"):
+                links.update({str(a): str(b) for a, b in (json.loads(v or "{}") or {}).items()})
+            elif k.endswith("_PLANOS_CAKTO"):
+                mapa.update({str(a): str(b) for a, b in (json.loads(v or "{}") or {}).items()})
+        except ValueError:
+            continue
+    produto_de = {}
+    for pid, plano in mapa.items():
+        produto_de.setdefault(plano, []).append(pid)
+    out = []
+    for plano in sorted(set(links) | set(produto_de)):
+        link = links.get(plano, "")
+        out.append({"plano": plano, "checkout": link, "oferta": link.rstrip("/").rsplit("/", 1)[-1] if link else "",
+                    "produtos_cakto": sorted(produto_de.get(plano, []))})
+    return out
