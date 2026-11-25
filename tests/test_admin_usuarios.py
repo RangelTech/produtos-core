@@ -76,3 +76,39 @@ def test_apagar_leva_as_linhas_e_recusa_qa(cli):
     r = c.delete(f"/api/painel/usuarios/{ana}")
     assert r.status_code == 200 and r.json()["linhas_removidas"].get("pedidos") == 2
     assert db.um("SELECT COUNT(*) AS n FROM pedidos")["n"] == 0 and c.get("/api/painel/usuarios").json()["total"] == 2
+
+
+def test_apagar_chama_o_gancho_de_arquivos_antes_das_linhas(cli):
+    """Spec 57 §5.1: apagar usuário remove também os arquivos dele (o gancho do produto roda antes, com as linhas ainda lá)."""
+    c, db, ana = cli
+    vistos = []
+
+    def gancho(u):
+        vistos.append((u["email"], db.um("SELECT COUNT(*) AS n FROM pedidos WHERE usuario=?", (u["id"],))["n"]))
+        return 3
+
+    c.app.state.apagar_arquivos_usuario = gancho
+    r = c.delete(f"/api/painel/usuarios/{ana}").json()
+    assert r["arquivos_removidos"] == 3 and vistos == [("ana@x.com", 2)]
+
+
+def test_por_canal_lista_e_troca_so_o_canal(cli):
+    """Posta e Atende (spec 57 §5.2 #2/#3): assinatura por canal; a lista mostra os canais e o PUT com `canal` mexe só nele."""
+    c, db, ana = cli
+    db.exec("DROP TABLE assinaturas") if _tem(db, "assinaturas") else None
+    db.exec("CREATE TABLE assinaturas (usuario INTEGER NOT NULL, marca TEXT NOT NULL, plano TEXT NOT NULL, ativo_ate REAL NOT NULL, PRIMARY KEY (usuario, marca))")
+    db.exec("INSERT INTO assinaturas(usuario,marca,plano,ativo_ate) VALUES(?,?,?,?)", (ana, "whats", "start", time.time() + 86400))
+    u = [x for x in c.get("/api/painel/usuarios?q=ana").json()["usuarios"]][0]
+    assert u["canais"] == [{"canal": "whats", "plano": "start", "ativo_ate": u["canais"][0]["ativo_ate"], "ativo": True}]
+    assert c.put(f"/api/painel/usuarios/{ana}", json={"canal": "insta", "plano": "pro", "dias": 10}).json()["canal"] == "insta"
+    canais = {x["canal"]: x["plano"] for x in c.get("/api/painel/usuarios?q=ana").json()["usuarios"][0]["canais"]}
+    assert canais == {"insta": "pro", "whats": "start"}
+    assert c.put(f"/api/painel/usuarios/{ana}", json={"canal": "insta", "plano": ""}).status_code == 422
+
+
+def _tem(db, tabela):
+    try:
+        db.um(f"SELECT 1 AS x FROM {tabela} LIMIT 1")
+        return True
+    except Exception:  # noqa: BLE001
+        return False

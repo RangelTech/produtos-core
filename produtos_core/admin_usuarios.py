@@ -2,7 +2,8 @@
 
   GET    /api/painel/usuarios?q=&pagina=   lista (id, e-mail, plano, ativo até, criado, ativo, qa)
   PUT    /api/painel/usuarios/{id}         {"plano": "...", "dias": N}  troca o plano e/ou dá N dias a partir de hoje
-  DELETE /api/painel/usuarios/{id}         apaga o usuário e as linhas dele em todas as tabelas (recusa o usuário de QA)
+  DELETE /api/painel/usuarios/{id}         apaga o usuário, as linhas dele em todas as tabelas e os arquivos (gancho
+                                           app.state.apagar_arquivos_usuario(u) do produto); recusa o usuário de QA
 Funciona no SQLite (desenvolvimento) e no Postgres (banco `produtos`).
 """
 from __future__ import annotations
@@ -41,6 +42,17 @@ def _tabelas_com_usuario(db) -> list[tuple[str, str]]:
     return out
 
 
+def _colunas(db, tabela: str) -> set:
+    if hasattr(db, "schema"):
+        return {r["c"] for r in db.todos("SELECT column_name AS c FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = ?", (tabela,))}
+    return {c[1] for c in db.con.execute(f'PRAGMA table_info("{tabela}")')}
+
+
+def _por_canal(db) -> bool:
+    """Posta e Atende: uma assinatura por canal (coluna `marca` em `assinaturas`)."""
+    return _tem_assinaturas(db) and "marca" in _colunas(db, "assinaturas")
+
+
 def _tem_assinaturas(db) -> bool:
     return any(t == "assinaturas" and c == "usuario" for t, c in _tabelas_com_usuario(db))
 
@@ -62,11 +74,15 @@ def registrar(r, db, checar) -> None:
         rows = db.todos("SELECT id, email, plano, ativo_ate, criado FROM usuarios WHERE email LIKE ? ORDER BY criado DESC LIMIT 100 OFFSET ?",
                         (f"%{q.strip().lower()}%", pagina * 100))
         agora = _agora()
+        canal = _por_canal(db)
         itens = []
         for u in rows:
             ate = ativo_ate(u)
             itens.append({"id": u["id"], "email": u["email"], "plano": u.get("plano"), "ativo_ate": ate, "criado": u.get("criado"),
                           "ativo": ate > agora, "qa": _qa(u["email"])})
+            if canal:
+                itens[-1]["canais"] = [{"canal": c["marca"], "plano": c["plano"], "ativo_ate": int(c["ativo_ate"] or 0), "ativo": (c["ativo_ate"] or 0) > agora}
+                                       for c in db.todos("SELECT marca, plano, ativo_ate FROM assinaturas WHERE usuario=? ORDER BY marca", (u["id"],))]
         total = db.um("SELECT COUNT(*) AS n FROM usuarios WHERE email LIKE ?", (f"%{q.strip().lower()}%",))["n"]
         return {"usuarios": itens, "total": total, "pagina": pagina}
 
@@ -80,8 +96,11 @@ def registrar(r, db, checar) -> None:
         plano = str(b.get("plano") if b.get("plano") is not None else (u.get("plano") or "")).strip()[:40]
         if plano and not re.fullmatch(r"[\w.-]{1,40}", plano):
             raise HTTPException(422, "plano inválido")
+        marca = str(b.get("canal") or "").strip()[:40]
+        por_canal = bool(marca) and _por_canal(db)
+        atual = db.um("SELECT plano, ativo_ate FROM assinaturas WHERE usuario=? AND marca=?", (uid, marca)) if por_canal else None
         dias = b.get("dias")
-        ate = int(u.get("ativo_ate") or 0)
+        ate = int((atual or u).get("ativo_ate") or 0)
         if dias is not None:
             try:
                 dias = int(dias)
@@ -90,6 +109,14 @@ def registrar(r, db, checar) -> None:
             if not 0 <= dias <= 3650:
                 raise HTTPException(422, "dias entre 0 e 3650")
             ate = _agora() + dias * 86400 if dias else _agora()
+        if por_canal:  # Posta e Atende: troca só a assinatura daquele canal
+            if not plano:
+                raise HTTPException(422, "informe o plano do canal")
+            if atual:
+                db.exec("UPDATE assinaturas SET plano=?, ativo_ate=? WHERE usuario=? AND marca=?", (plano, ate, uid, marca))
+            else:
+                db.exec("INSERT INTO assinaturas(usuario,marca,plano,ativo_ate) VALUES(?,?,?,?)", (uid, marca, plano, ate))
+            return {"ok": True, "plano": plano, "ativo_ate": ate, "canal": marca}
         db.exec("UPDATE usuarios SET plano=?, ativo_ate=? WHERE id=?", (plano or None, ate, uid))
         if _tem_assinaturas(db):
             if db.um("SELECT 1 AS x FROM assinaturas WHERE usuario=?", (uid,)):
@@ -109,10 +136,15 @@ def registrar(r, db, checar) -> None:
             raise HTTPException(404, "usuário não encontrado")
         if _qa(u["email"]):
             raise HTTPException(409, "o usuário de QA não pode ser apagado")
+        # arquivos do usuário (disco e MinIO): cada produto sabe onde guarda; roda antes de apagar as linhas que apontam para eles
+        arquivos = 0
+        gancho = getattr(request.app.state, "apagar_arquivos_usuario", None)
+        if gancho:
+            arquivos = int(gancho(u) or 0)
         removidas = {}
         for tabela, col in _tabelas_com_usuario(db):
             n = db.exec(f'DELETE FROM "{tabela}" WHERE "{col}"=?', (uid,)).rowcount
             if n:
                 removidas[tabela] = n
         db.exec("DELETE FROM usuarios WHERE id=?", (uid,))
-        return {"ok": True, "email": u["email"], "linhas_removidas": removidas}
+        return {"ok": True, "email": u["email"], "linhas_removidas": removidas, "arquivos_removidos": arquivos}
