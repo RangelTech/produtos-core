@@ -333,6 +333,24 @@ def registrar(app, db, *, enviar, login, usuario, criar_usuario, produto: str, b
         _limpar_erros(email)
         return _redirecionar_logado(u, destino)
 
+    @app.post("/api/acesso/link-qa")
+    async def link_qa(request: Request):
+        """Painel único (spec 57 §6.2A): link de entrada de uso único para o USUÁRIO DE QA, pedido pelo painel com o token de
+        serviço (ACESSO_PAINEL_TOKEN). Não serve para nenhum outro e-mail. Não manda e-mail e não gasta a cota de 3 por hora."""
+        token = os.environ.get("ACESSO_PAINEL_TOKEN", "")
+        enviado = (request.headers.get("authorization") or "").removeprefix("Bearer ").strip()
+        if not token or not hmac.compare_digest(enviado, token):
+            raise HTTPException(401, "token do painel inválido")
+        qa = _demo()[0]
+        if not qa:
+            raise HTTPException(404, "este produto não tem usuário de QA configurado")
+        criar_usuario(qa)
+        t = secrets.token_urlsafe(32)
+        db.exec("INSERT INTO acesso_links(hash,email,tipo,expira,usado,criado) VALUES(?,?,?,?,NULL,?)",
+                (_h(t), qa, "entrar", agora() + 120, agora() - 7200))  # vale 2 min; criado "antigo" para não contar na cota
+        log.info("link de QA pedido pelo painel para %s", qa)
+        return {"link": f"{base}/acesso/entrar?t={t}", "email": qa, "valido_s": 120}
+
     @app.get("/acesso/confirmar")
     def confirmar(t: str = ""):
         email = _usar_link(t, "confirmar")

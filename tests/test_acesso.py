@@ -310,3 +310,27 @@ def test_dev_sem_smtp_mantem_o_link():
     db.exec("INSERT INTO usuarios(email,criado) VALUES(?,1)", ("d@exemplo.com",))
     lk = TestClient(app).post("/api/entrar/link", json={"email": "d@exemplo.com"}).json()["link_dev"]
     assert TestClient(app).get("/" + lk.split("/", 3)[3], follow_redirects=False).headers["location"] == "/app"
+
+
+def test_link_qa_do_painel(monkeypatch):
+    monkeypatch.setenv("ACESSO_PAINEL_TOKEN", "tok-painel")
+    app, db, caixa = montar(BancoSQLite)
+    c = TestClient(app)
+    assert c.post("/api/acesso/link-qa").status_code == 401
+    assert c.post("/api/acesso/link-qa", headers={"Authorization": "Bearer errado"}).status_code == 401
+    r = c.post("/api/acesso/link-qa", headers={"Authorization": "Bearer tok-painel"})
+    assert r.status_code == 200 and r.json()["email"] == "demo@exemplo.com" and caixa == []
+    caminho = "/" + r.json()["link"].split("/", 3)[3]
+    x = TestClient(app)
+    assert x.get(caminho, follow_redirects=False).headers["location"] == "/app"
+    assert x.get("/api/senha").json()["email"] == "demo@exemplo.com"
+    assert "invalido" in TestClient(app).get(caminho, follow_redirects=False).headers["location"]  # uso único
+    for _ in range(5):  # não gasta a cota de e-mails do QA
+        assert c.post("/api/acesso/link-qa", headers={"Authorization": "Bearer tok-painel"}).status_code == 200
+    assert db.um("SELECT COUNT(*) AS n FROM acesso_links WHERE email='demo@exemplo.com' AND criado>?", (acesso.agora() - 3600,))["n"] == 0
+
+
+def test_link_qa_sem_token_configurado(monkeypatch):
+    monkeypatch.delenv("ACESSO_PAINEL_TOKEN", raising=False)
+    app, _, _ = montar(BancoSQLite)
+    assert TestClient(app).post("/api/acesso/link-qa", headers={"Authorization": "Bearer "}).status_code == 401
