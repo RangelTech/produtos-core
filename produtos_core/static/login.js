@@ -27,7 +27,12 @@
     document.head.append(s)
   }))
   const entregar = (t) => { const f = pend; pend = null; if (f) f(t) }
-  async function captcha() {
+  let voando = null  // um pedido de token por vez (o widget é um só)
+  function captcha() {
+    if (!voando) voando = gerar().finally(() => { voando = null })
+    return voando
+  }
+  async function gerar() {
     await config
     if (!SITE) return ''
     try {
@@ -44,7 +49,17 @@
       })
     } catch { return '' }
   }
-  const postH = async (url, corpo) => post(url, { ...corpo, captcha: await captcha() })
+  // O token é gerado assim que o formulário abre (leva alguns segundos), para estar pronto no clique. Vale ~5 min.
+  let pronto = null
+  const preparar = () => { pronto = { quando: Date.now(), token: captcha() } }
+  const pegarToken = async () => {
+    const p = pronto && Date.now() - pronto.quando < 240000 ? pronto.token : captcha()
+    pronto = null
+    const t = await p
+    setTimeout(preparar, 500)  // já deixa o próximo pronto (se o envio der erro, a pessoa tenta de novo sem esperar)
+    return t
+  }
+  const postH = async (url, corpo) => post(url, { ...corpo, captcha: await pegarToken() })
 
   const largo = 'width:100%;margin-top:16px'
   const campoSenha = (id, rotulo, auto) => `<label for="${id}" style="margin-top:12px">${rotulo}</label>
@@ -90,6 +105,7 @@
     const ir = (p, extra) => {
       if (extra?.token) token = extra.token
       corpo.innerHTML = PASSOS[p](); msg(extra?.msg || '', extra?.tipo || 'erro')
+      if (p !== 'redefinir' && !pronto) preparar()
       const ce = $('#l-email', corpo); if (ce && email) ce.value = email
       setTimeout(() => ((ce && !ce.value ? ce : null) || $('input[type=password]', corpo) || ce)?.focus(), 50)
     }
