@@ -105,7 +105,8 @@ def _h(valor: str) -> str:
 
 def registrar(app, db, *, enviar, login, usuario, criar_usuario, produto: str, base_url: str,
               destino: str = "/app", cor: str = "#7c5cff", demo_email: str = "", demo_senha: str = "",
-              captcha=None, dev: bool = False) -> None:
+              captcha=None, dev: bool = False, antes_cadastro=None, depois_cadastro=None,
+              pagina_entrar: str = "/") -> None:
     """Liga as rotas de cadastro e login no app FastAPI do produto.
 
     enviar(para, assunto, texto, html) -> bool   e-mail pelo SMTP do produto (o produto põe a moldura dele)
@@ -114,6 +115,9 @@ def registrar(app, db, *, enviar, login, usuario, criar_usuario, produto: str, b
     criar_usuario(email) -> dict                 cria (ou devolve) o usuário no esquema do produto
     captcha(token, ip) -> bool                   opcional (testes); padrão: Turnstile
     dev=True                                     devolve o link na resposta (`link_dev`), só para testes locais
+    antes_cadastro(corpo) -> None                campos extras do produto (valida; HTTPException para recusar)
+    depois_cadastro(usuario, corpo, request)     grava os campos extras depois de criar a conta
+    pagina_entrar                                página com o formulário de entrar (recebe ?redefinir= e ?link=invalido)
     """
     verificar = captcha or captcha_ok
     for sql in ESQUEMA:
@@ -208,7 +212,7 @@ def registrar(app, db, *, enviar, login, usuario, criar_usuario, produto: str, b
             t = _novo_link(email, "redefinir", LINK_VALIDO_S)
             if not t:
                 return False
-            url = f"{base}/?redefinir={t}"
+            url = f"{base}{pagina_entrar}?redefinir={t}"
             ultimo["url"], ultimo["token"] = url, t
             return enviar(email, f"Crie uma senha nova no {produto}",
                           f"Para criar uma senha nova no {produto}: {url}\nVale por 15 minutos.",
@@ -261,6 +265,8 @@ def registrar(app, db, *, enviar, login, usuario, criar_usuario, produto: str, b
         if not email:
             raise HTTPException(422, "e-mail inválido")
         senha = _validar_nova(b.get("senha"))
+        if antes_cadastro:
+            antes_cadastro(b)
         _exigir_captcha(b, request)
         ip = ip_da_requisicao(request)
         if ip and _conta("cadastro:" + _h(ip), 3600) >= MAX_CADASTROS_IP_HORA:
@@ -275,6 +281,8 @@ def registrar(app, db, *, enviar, login, usuario, criar_usuario, produto: str, b
             _evento("cadastro:" + _h(ip))
         u = criar_usuario(email)
         db.exec("UPDATE usuarios SET senha_hash=? WHERE id=?", (hash_senha(senha), u["id"]))
+        if depois_cadastro:
+            depois_cadastro(u, b, request)
         _mandar(email, "confirmar")
         return login(db.um("SELECT * FROM usuarios WHERE id=?", (u["id"],)))
 
@@ -319,7 +327,7 @@ def registrar(app, db, *, enviar, login, usuario, criar_usuario, produto: str, b
         email = _usar_link(t, "entrar")
         u = db.um("SELECT * FROM usuarios WHERE email=?", (email,)) if email else None
         if not u:
-            return RedirectResponse("/?entrar=1&link=invalido", status_code=303)
+            return RedirectResponse(f"{pagina_entrar}?entrar=1&link=invalido", status_code=303)
         if not u.get("email_confirmado"):  # quem abriu o link provou que é dono do e-mail
             db.exec("UPDATE usuarios SET email_confirmado=? WHERE id=?", (agora(), u["id"]))
         _limpar_erros(email)
@@ -329,7 +337,7 @@ def registrar(app, db, *, enviar, login, usuario, criar_usuario, produto: str, b
     def confirmar(t: str = ""):
         email = _usar_link(t, "confirmar")
         if not email:
-            return RedirectResponse("/?entrar=1&link=invalido", status_code=303)
+            return RedirectResponse(f"{pagina_entrar}?entrar=1&link=invalido", status_code=303)
         db.exec("UPDATE usuarios SET email_confirmado=? WHERE email=?", (agora(), email))
         u = db.um("SELECT * FROM usuarios WHERE email=?", (email,))
         return _redirecionar_logado(u, destino) if u else RedirectResponse("/", status_code=303)

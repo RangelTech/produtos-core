@@ -275,3 +275,29 @@ def test_email_que_nao_saiu_nao_conta_na_cota():
     saiu["ok"] = True
     assert c.post("/api/entrar/link", json={"email": "q@exemplo.com"}).status_code == 200
     assert db.um("SELECT COUNT(*) AS n FROM acesso_links")["n"] == 1
+
+
+def test_ganchos_de_cadastro_e_pagina_de_entrar():
+    db = BancoSQLite(); db.con.execute("ALTER TABLE usuarios ADD COLUMN nome TEXT"); app = FastAPI(); caixa = []
+
+    def antes(b):
+        if not b.get("nome"):
+            raise HTTPException(422, "Como você se chama?")
+
+    def depois(u, b, request):
+        db.exec("UPDATE usuarios SET nome=? WHERE id=?", (b["nome"], u["id"]))
+
+    def criar(e):
+        db.exec("INSERT OR IGNORE INTO usuarios(email,criado) VALUES(?,1)", (e,))
+        return db.um("SELECT * FROM usuarios WHERE email=?", (e,))
+    acesso.registrar(app, db, enviar=lambda para, a, texto, h: caixa.append(texto) or True, login=lambda u: JSONResponse({"ok": True}),
+                     usuario=lambda r: None, criar_usuario=criar, produto="T", base_url="https://t", captcha=lambda t, i: True,
+                     antes_cadastro=antes, depois_cadastro=depois, pagina_entrar="/entrar")
+    c = TestClient(app)
+    assert c.post("/api/cadastro", json={"email": "n@exemplo.com", "senha": "senha-boa-1"}).status_code == 422
+    assert db.um("SELECT COUNT(*) AS n FROM usuarios")["n"] == 0
+    assert c.post("/api/cadastro", json={"email": "n@exemplo.com", "senha": "senha-boa-1", "nome": "Ana"}).status_code == 200
+    assert db.um("SELECT nome FROM usuarios WHERE email=?", ("n@exemplo.com",))["nome"] == "Ana"
+    c.post("/api/senha/esqueci", json={"email": "n@exemplo.com"})
+    assert "https://t/entrar?redefinir=" in caixa[-1]
+    assert c.get("/acesso/entrar?t=nada", follow_redirects=False).headers["location"] == "/entrar?entrar=1&link=invalido"
