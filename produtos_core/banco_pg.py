@@ -123,11 +123,26 @@ def _min_max_escalar(sql: str) -> str:
     return ''.join(out)
 
 
+def _having_com_apelido(sql: str) -> str:
+    """O SQLite aceita apelido do SELECT no HAVING (`... SUM(v) s ... HAVING s < 0`); o Postgres não.
+    Quando o HAVING não tem função (só apelidos e valores), a consulta vira um SELECT externo com WHERE."""
+    m = re.search(r'\bHAVING\b', sql, re.I)
+    if not m or re.search(r'\bHAVING\b', sql[m.end():], re.I):
+        return sql
+    resto = sql[m.end():]
+    fim = re.search(r'\b(ORDER\s+BY|LIMIT|OFFSET)\b', resto, re.I)
+    cond = resto[:fim.start()] if fim else resto
+    cauda = resto[fim.start():] if fim else ''
+    if '(' in cond:
+        return sql
+    return f'SELECT * FROM ({sql[:m.start()].rstrip()}) AS _q WHERE {cond.strip()} {cauda}'.rstrip()
+
+
 def traduzir(sql: str, com_params: bool = True) -> tuple[str, dict]:
     """Traduz um comando DML/consulta. Devolve (sql_postgres, dicas) — dicas: {'ignorar': bool, 'substituir': tabela}.
     Primeiro as funcoes (datas, MIN/MAX escalar), depois placeholders e `%` (fora e dentro de literais)."""
     dicas = {}
-    sql = _min_max_escalar(_funcoes_de_data(sql))
+    sql = _having_com_apelido(_min_max_escalar(_funcoes_de_data(sql)))
     novos = []
     for tipo, p in _partes(sql):
         if tipo == 'str':

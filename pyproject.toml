@@ -1,6 +1,6 @@
 [project]
 name = "produtos-core"
-version = "0.1.5"
+version = "0.1.6"
 description = "Biblioteca compartilhada dos produtos Rangel Tech: banco Postgres compatível com o SQLite dos produtos, migração e (próximas versões) identidade, login e armazenamento S3."
 requires-python = ">=3.11"
 dependencies = ["psycopg[binary]>=3.2"]

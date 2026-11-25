@@ -31,3 +31,9 @@ def test_ddl():
 
 def test_dividir_script_respeita_aspas():
     assert len(dividir_script("CREATE TABLE a (x TEXT DEFAULT ';');\n-- comentario\nCREATE INDEX i ON a(x);")) == 2
+
+
+def test_having_com_apelido():
+    s, _ = traduzir("SELECT conta, SUM(valor) s FROM l WHERE conta LIKE 'u:%' GROUP BY conta HAVING s < 0")
+    assert s == "SELECT * FROM (SELECT conta, SUM(valor) s FROM l WHERE conta ILIKE 'u:%%' GROUP BY conta) AS _q WHERE s < 0"
+    assert traduzir("SELECT a, COUNT(*) FROM t GROUP BY a HAVING COUNT(*) > 1")[0] == "SELECT a, COUNT(*) FROM t GROUP BY a HAVING COUNT(*) > 1"
