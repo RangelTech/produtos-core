@@ -334,3 +334,21 @@ def test_link_qa_sem_token_configurado(monkeypatch):
     monkeypatch.delenv("ACESSO_PAINEL_TOKEN", raising=False)
     app, _, _ = montar(BancoSQLite)
     assert TestClient(app).post("/api/acesso/link-qa", headers={"Authorization": "Bearer "}).status_code == 401
+
+
+def test_boas_vindas_da_compra_entra_sem_senha(ambiente):
+    """Compra aprovada de quem nunca entrou: e-mail "acesso liberado" com link de 7 dias que já entra logado (uso único)."""
+    import re as _re
+    app, db, caixa = ambiente
+    db.exec("INSERT INTO usuarios(email,criado) VALUES(?,?)", ("comprou@exemplo.com", 1))  # conta criada pelo webhook
+    assert app.state.acesso_boas_vindas("comprou@exemplo.com", "Viral")
+    m = caixa[-1]
+    assert m["para"] == "comprou@exemplo.com" and "liberado" in m["assunto"] and "7 dias" in m["texto"]
+    link = _re.search(r"https?://\S+/acesso/entrar\?t=\S+", m["texto"]).group(0)
+    c = TestClient(app)
+    r = c.get(link.split("/acesso", 1)[1].join(["/acesso", ""]), follow_redirects=False)
+    assert r.status_code == 303 and "link=invalido" not in r.headers["location"]
+    assert c.get("/api/conta").json()["email"] == "comprou@exemplo.com"
+    r2 = TestClient(app).get(link.split("/acesso", 1)[1].join(["/acesso", ""]), follow_redirects=False)
+    assert "link=invalido" in r2.headers["location"]  # uso único
+    assert db.um("SELECT expira - criado AS v FROM acesso_links WHERE email=?", ("comprou@exemplo.com",))["v"] >= 7 * 24 * 3600 - 5

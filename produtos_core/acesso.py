@@ -34,6 +34,7 @@ RODADAS = 200_000
 SENHA_MIN = 8
 LINK_VALIDO_S = 15 * 60
 CONFIRMAR_VALIDO_S = 7 * 24 * 3600
+COMPRA_VALIDO_S = 7 * 24 * 3600   # link do e-mail "seu acesso está liberado" (compra aprovada)
 MAX_EMAILS_HORA = 3
 MAX_CADASTROS_IP_HORA = 10
 MAX_ERROS_SENHA = 5
@@ -226,6 +227,25 @@ def registrar(app, db, *, enviar, login, usuario, criar_usuario, produto: str, b
                       f"Bem-vindo ao {produto}! Confirme seu e-mail: {url}",
                       f'<p style="font-size:16px">Bem-vindo ao {produto}! Sua conta já está pronta.</p>'
                       f'<p>Falta só confirmar o e-mail:</p>{_botao(url, "Confirmar e-mail")}')
+
+    def boas_vindas_compra(email: str, plano: str = "") -> bool:
+        """Compra aprovada (webhook) de quem ainda não tem senha: e-mail com link de entrada de uso único, válido por 7 dias.
+        Quem entra por ele cai logado no app e cria a senha depois. O produto chama via app.state.acesso_boas_vindas."""
+        t = _novo_link(email, "entrar", COMPRA_VALIDO_S)
+        if not t:
+            return False
+        url = f"{base}/acesso/entrar?t={t}"
+        ultimo["url"] = url
+        sufixo = f" (plano {plano})" if plano else ""
+        return enviar(email, f"Seu acesso ao {produto} está liberado",
+                      f"Pagamento confirmado{sufixo}! Entre no {produto} por este link: {url}\n"
+                      "Vale por 7 dias e só funciona uma vez. Depois é só criar sua senha no app.",
+                      f'<p style="font-size:16px">Pagamento confirmado{sufixo}! Seu acesso ao {produto} já está liberado.</p>'
+                      f'{_botao(url, "Entrar agora")}'
+                      '<p style="color:#8b8b98">O botão vale por 7 dias e só funciona uma vez. Depois de entrar, crie sua senha no app '
+                      'para voltar quando quiser.</p>')
+
+    app.state.acesso_boas_vindas = boas_vindas_compra
 
     def _redirecionar_logado(u: dict, para: str):
         r = login(u)
