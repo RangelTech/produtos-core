@@ -233,6 +233,9 @@ class _Execucao:
     def execute(self, sql: str, args=()):
         return self.b._executar(sql, args)
 
+    def commit(self):                                # compatibilidade: no Postgres cada comando fora de tx() ja e gravado
+        return None
+
     def executescript(self, script: str):
         for c in dividir_script(script):
             self.b._executar(c, (), ddl=True)
