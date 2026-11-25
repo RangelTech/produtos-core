@@ -244,7 +244,9 @@ class Banco:
         self._trava = threading.RLock()
         self._pg = psycopg.connect(dsn, autocommit=True, row_factory=_fabrica_linhas)
         with self._pg.cursor() as c:
-            c.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
+            c.execute('select 1 from pg_namespace where nspname=%s', (schema,))
+            if not c.fetchone():                     # o usuario do produto nao cria schema; so o cria quem pode (testes)
+                c.execute(f'CREATE SCHEMA "{schema}"')
             c.execute(f'SET search_path TO "{schema}"')
         self._colunas: dict[str, list[str]] = {}
         self._em_tx = False
